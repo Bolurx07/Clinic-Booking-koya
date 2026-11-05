@@ -75,15 +75,17 @@ Render's free tier sleeps after about 15 minutes idle. A free external pinger
 
 ## Endpoints
 
-| Method and path          | Auth      | Status              |
-| ------------------------ | --------- | ------------------- |
-| `GET /health`            | public    | done (Phase 0)      |
-| `POST /reset`            | X-API-Key | Phase 1             |
-| `GET /slots`             | X-API-Key | Phase 1             |
-| `POST /bookings`         | X-API-Key | Phases 1 to 5       |
-| `GET /bookings/{id}`     | X-API-Key | Phase 1             |
-| `DELETE /bookings/{id}`  | X-API-Key | Phase 3             |
-| `GET /bookings`          | X-API-Key | Phase 4             |
+| Method and path          | Auth      | Status                          |
+| ------------------------ | --------- | ------------------------------- |
+| `GET /health`            | public    | done (Phase 0)                  |
+| `POST /reset`            | X-API-Key | done (Phase 1)                  |
+| `GET /slots`             | X-API-Key | done (Phase 1)                  |
+| `POST /bookings`         | X-API-Key | Phase 1 done; 2 to 5 next       |
+| `GET /bookings/{id}`     | X-API-Key | done (Phase 1)                  |
+| `DELETE /bookings/{id}`  | X-API-Key | Phase 3                         |
+| `GET /bookings`          | X-API-Key | Phase 4                         |
+
+The `X-API-Key` check arrives in Phase 2. Until then, these endpoints are not protected.
 
 `/health` is not part of the API contract. It is public on purpose: Render's health
 check and keep-alive pingers can't send custom headers, and it reveals nothing except "ok".

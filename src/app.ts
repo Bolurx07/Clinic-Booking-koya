@@ -1,6 +1,9 @@
 import Fastify, { type FastifyError, type FastifyInstance } from 'fastify';
 import type pg from 'pg';
+import { registerBookingRoutes } from './routes/bookings.js';
 import { registerHealthRoute } from './routes/health.js';
+import { registerResetRoute } from './routes/reset.js';
+import { registerSlotsRoute } from './routes/slots.js';
 
 export function buildApp(pool: pg.Pool): FastifyInstance {
   const app = Fastify({ logger: true });
@@ -21,6 +24,9 @@ export function buildApp(pool: pg.Pool): FastifyInstance {
   });
 
   registerHealthRoute(app, pool);
+  registerResetRoute(app, pool);
+  registerSlotsRoute(app, pool);
+  registerBookingRoutes(app, pool);
 
   return app;
 }
