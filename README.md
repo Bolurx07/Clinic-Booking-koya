@@ -80,9 +80,9 @@ Render's free tier sleeps after about 15 minutes idle. A free external pinger
 | `GET /health`            | public    | done (Phase 0)                  |
 | `POST /reset`            | X-API-Key | done (Phase 1)                  |
 | `GET /slots`             | X-API-Key | done (Phase 1)                  |
-| `POST /bookings`         | X-API-Key | Phases 1-2 done; 3 to 5 next    |
+| `POST /bookings`         | X-API-Key | Phases 1-3 done; 4 to 5 next    |
 | `GET /bookings/{id}`     | X-API-Key | done (Phase 1)                  |
-| `DELETE /bookings/{id}`  | X-API-Key | Phase 3                         |
+| `DELETE /bookings/{id}`  | X-API-Key | done (Phase 3)                  |
 | `GET /bookings`          | X-API-Key | Phase 4                         |
 
 Every route except `/health` requires the `X-API-Key` header. A missing or wrong key returns 401.
@@ -96,7 +96,19 @@ Every error response is `{"error": "<message>"}`.
 
 ### Concurrency (one confirmed booking per slot)
 
-_To be written in Phase 3._
+The database enforces this, not the app. A partial unique index allows only one `confirmed`
+row per slot, while cancelled rows don't count:
+
+```sql
+CREATE UNIQUE INDEX one_confirmed_per_slot ON bookings(slot_id) WHERE status = 'confirmed';
+```
+
+`POST /bookings` doesn't check for an existing booking first, because two requests could both
+pass that check at the same moment. It just inserts, and a violation of this index returns 409.
+
+`DELETE /bookings/{id}` cancels with a single `UPDATE ... WHERE id = $1 AND status = 'confirmed'`,
+so of two simultaneous cancels, one gets 200 and the other 409. Cancelling frees the slot, and
+rebooking it creates a new booking with a new id. The cancelled booking stays readable by its id.
 
 ### Idempotency
 

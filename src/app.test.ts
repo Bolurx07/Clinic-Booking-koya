@@ -12,12 +12,24 @@ const validBooking = { slot_id: 's1', name: 'Ada Obi', email: 'ada@example.com' 
 // would fail against this address, so it could never reach a real database.
 const unreachableDatabaseUrl = 'postgres://placeholder:placeholder@127.0.0.1:1/none';
 
-function createTestApp(slotRows: { hasStarted: boolean }[] = [{ hasStarted: false }]) {
+interface FakeBookingResults {
+  insertError?: Error;
+  cancelledRows?: object[];
+  existingRows?: object[];
+}
+
+function createTestApp(
+  slotRows: { hasStarted: boolean }[] = [{ hasStarted: false }],
+  { insertError, cancelledRows = [], existingRows = [] }: FakeBookingResults = {},
+) {
   const pool = new pg.Pool({ connectionString: unreachableDatabaseUrl });
 
   const query = mock.method(pool, 'query', async (sql: string, params: unknown[] = []) => {
     if (sql.includes('FROM slots WHERE id')) return { rows: slotRows };
+    if (sql.includes('UPDATE bookings')) return { rows: cancelledRows };
+    if (sql.includes('SELECT 1 FROM bookings')) return { rows: existingRows };
     if (sql.includes('INSERT INTO bookings')) {
+      if (insertError) throw insertError;
       const [id, slotId, name, email] = params;
       const createdAt = new Date('2026-11-05T12:00:00Z');
       return { rows: [{ id, slot_id: slotId, name, email, status: 'confirmed', created_at: createdAt }] };
@@ -50,6 +62,7 @@ describe('401: X-API-Key', () => {
     { method: 'GET', url: '/slots' },
     { method: 'POST', url: '/bookings', payload: validBooking },
     { method: 'GET', url: '/bookings/some-id' },
+    { method: 'DELETE', url: '/bookings/some-id' },
   ];
 
   for (const route of routes) {
@@ -268,5 +281,115 @@ describe('201: POST /bookings', () => {
 
     assert.equal(response.statusCode, 201);
     assert.equal(response.json().email, 'a.b+c@sub.example.co');
+  });
+});
+
+// These prove how the route reacts to a violation. Only a real database can prove the index causes one.
+describe('409: POST /bookings when the slot is already booked', () => {
+  function databaseError(code: string, constraint: string): Error {
+    return Object.assign(new Error('simulated database error'), { code, constraint });
+  }
+
+  test('a violation of one_confirmed_per_slot is 409', async () => {
+    const { app } = createTestApp(undefined, { insertError: databaseError('23505', 'one_confirmed_per_slot') });
+
+    const response = await app.inject(postBooking(validBooking));
+
+    assert.equal(response.statusCode, 409);
+    assert.deepEqual(response.json(), { error: 'slot already booked' });
+  });
+
+  test('a started slot is 400, without trying to insert', async () => {
+    const { app, countInserts } = createTestApp([{ hasStarted: true }], {
+      insertError: databaseError('23505', 'one_confirmed_per_slot'),
+    });
+
+    const response = await app.inject(postBooking(validBooking));
+
+    assert.deepEqual(response.json(), { error: 'slot has already started' });
+    assert.equal(countInserts(), 0);
+  });
+
+  for (const [label, insertError] of [
+    ['a unique violation on another constraint', databaseError('23505', 'bookings_pkey')],
+    ['another error on the same constraint', databaseError('23503', 'one_confirmed_per_slot')],
+    ['a non-database error', new Error('simulated failure')],
+  ] as const) {
+    test(`${label} stays a 500`, async () => {
+      const { app } = createTestApp(undefined, { insertError });
+
+      const response = await app.inject(postBooking(validBooking));
+
+      assert.equal(response.statusCode, 500);
+      assert.deepEqual(response.json(), { error: 'internal server error' });
+    });
+  }
+});
+
+describe('DELETE /bookings/{id}', () => {
+  const cancelledRow = {
+    id: 'b1',
+    slot_id: 's1',
+    name: 'Ada Obi',
+    email: 'ada@example.com',
+    status: 'cancelled',
+    created_at: new Date('2026-11-05T12:00:00Z'),
+  };
+  const cancelRequest: InjectOptions = { method: 'DELETE', url: '/bookings/b1', headers: validHeaders };
+
+  test('200 with the cancelled booking', async () => {
+    const { app, query } = createTestApp(undefined, { cancelledRows: [cancelledRow] });
+
+    const response = await app.inject(cancelRequest);
+    const update = query.mock.calls[0];
+
+    assert.equal(response.statusCode, 200);
+    assert.deepEqual(response.json(), { ...cancelledRow, created_at: '2026-11-05T12:00:00Z' });
+    assert.equal(query.mock.callCount(), 1);
+    assert.match(String(update.arguments[0]), /WHERE id = \$1 AND status = 'confirmed'/);
+    assert.deepEqual(update.arguments[1], ['b1']);
+  });
+
+  test('409 if already cancelled', async () => {
+    const { app } = createTestApp(undefined, { existingRows: [{}] });
+
+    const response = await app.inject(cancelRequest);
+
+    assert.equal(response.statusCode, 409);
+    assert.deepEqual(response.json(), { error: 'booking already cancelled' });
+  });
+
+  test('404 if not found', async () => {
+    const { app } = createTestApp();
+
+    const response = await app.inject(cancelRequest);
+
+    assert.equal(response.statusCode, 404);
+    assert.deepEqual(response.json(), { error: 'booking not found' });
+  });
+
+  test('a JSON Content-Type with no body still cancels', async () => {
+    const { app } = createTestApp(undefined, { cancelledRows: [cancelledRow] });
+
+    const response = await app.inject({
+      ...cancelRequest,
+      headers: { ...validHeaders, 'content-type': 'application/json' },
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json().status, 'cancelled');
+  });
+
+  test('a JSON Content-Type with no key is still 401', async () => {
+    const { app, query } = createTestApp();
+
+    const response = await app.inject({
+      method: 'DELETE',
+      url: '/bookings/b1',
+      headers: { 'content-type': 'application/json' },
+    });
+
+    assert.equal(response.statusCode, 401);
+    assert.equal(query.mock.callCount(), 0);
   });
 });
