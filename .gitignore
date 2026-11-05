@@ -1,0 +1,9 @@
+node_modules/
+dist/
+coverage/
+*.log
+.env
+
+# Not part of this project
+clinic-booking-api-brief.md
+reverse_geocode.py

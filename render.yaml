@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: clinic-booking
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npm run build
+    # Render's pre-deploy command is paid-only, so migrations run at start-up.
+    startCommand: npm run migrate:prod && npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+      # Secrets: entered in the Render dashboard, never committed.
+      - key: DATABASE_URL
+        sync: false
+      - key: API_KEY
+        sync: false

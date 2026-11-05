@@ -1,0 +1,28 @@
+{
+  "name": "clinic-booking",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Clinic booking API and web page (Koya Cohort 4, Task 1)",
+  "type": "module",
+  "engines": {
+    "node": "24.x"
+  },
+  "scripts": {
+    "dev": "tsx watch --env-file=.env src/server.ts",
+    "build": "tsc",
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit",
+    "migrate": "tsx --env-file=.env src/migrate.ts",
+    "migrate:prod": "node dist/migrate.js"
+  },
+  "dependencies": {
+    "fastify": "^5.12.8",
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "@types/pg": "^8.23.1",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
