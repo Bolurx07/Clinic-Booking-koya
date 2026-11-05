@@ -3,12 +3,15 @@ import type { FastifyInstance } from 'fastify';
 import type pg from 'pg';
 import { toUtcIso } from '../db.js';
 
-// Not checked at runtime yet: field validation arrives in Phase 2.
 interface NewBooking {
-  slot_id: string;
+  slotId: string;
   name: string;
   email: string;
 }
+
+// Requires a dot in the domain. Each part excludes the separators around it, so
+// the pattern can't backtrack badly on very long input.
+const emailPattern = /^[^\s@]+@[^\s@.]+(?:\.[^\s@.]+)+$/;
 
 interface BookingRow {
   id: string;
@@ -23,9 +26,46 @@ function toBooking(row: BookingRow): Omit<BookingRow, 'created_at'> & { created_
   return { ...row, created_at: toUtcIso(row.created_at) };
 }
 
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim() !== '';
+}
+
+// Reports the first invalid field. Any body that isn't an object counts as all fields missing.
+function parseNewBooking(body: unknown): NewBooking | { error: string } {
+  const fields: Record<string, unknown> = typeof body === 'object' && body !== null ? { ...body } : {};
+  const { slot_id: slotId, name, email } = fields;
+
+  if (!isNonEmptyString(slotId)) return { error: 'slot_id must be a non-empty string' };
+  if (!isNonEmptyString(name)) return { error: 'name must be a non-empty string' };
+  if (!isNonEmptyString(email)) return { error: 'email must be a non-empty string' };
+
+  const normalizedEmail = email.trim().toLowerCase();
+  if (!emailPattern.test(normalizedEmail)) return { error: 'email is invalid' };
+
+  return { slotId, name: name.trim(), email: normalizedEmail };
+}
+
 export function registerBookingRoutes(app: FastifyInstance, pool: pg.Pool): void {
-  app.post<{ Body: NewBooking }>('/bookings', async (request, reply) => {
-    const { slot_id: slotId, name, email } = request.body;
+  app.post('/bookings', async (request, reply) => {
+    const newBooking = parseNewBooking(request.body);
+    if ('error' in newBooking) {
+      return reply.code(400).send({ error: newBooking.error });
+    }
+    const { slotId, name, email } = newBooking;
+
+    // now() is the database clock, so the app server's clock doesn't matter.
+    const slotResult = await pool.query<{ hasStarted: boolean }>(
+      'SELECT start <= now() AS "hasStarted" FROM slots WHERE id = $1',
+      [slotId],
+    );
+    const slot = slotResult.rows[0];
+    if (!slot) {
+      return reply.code(404).send({ error: 'slot not found' });
+    }
+    if (slot.hasStarted) {
+      return reply.code(400).send({ error: 'slot has already started' });
+    }
+
     const result = await pool.query<BookingRow>(
       `INSERT INTO bookings (id, slot_id, name, email, status)
        VALUES ($1, $2, $3, $4, 'confirmed')

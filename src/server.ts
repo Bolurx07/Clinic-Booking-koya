@@ -4,7 +4,7 @@ import { createPool } from './db.js';
 
 const config = loadConfig();
 const pool = createPool(config.databaseUrl);
-const app = buildApp(pool);
+const app = buildApp(pool, config.apiKey);
 
 try {
   // 0.0.0.0 so Render (and containers) can reach the server, not just localhost.

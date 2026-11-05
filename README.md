@@ -80,12 +80,12 @@ Render's free tier sleeps after about 15 minutes idle. A free external pinger
 | `GET /health`            | public    | done (Phase 0)                  |
 | `POST /reset`            | X-API-Key | done (Phase 1)                  |
 | `GET /slots`             | X-API-Key | done (Phase 1)                  |
-| `POST /bookings`         | X-API-Key | Phase 1 done; 2 to 5 next       |
+| `POST /bookings`         | X-API-Key | Phases 1-2 done; 3 to 5 next    |
 | `GET /bookings/{id}`     | X-API-Key | done (Phase 1)                  |
 | `DELETE /bookings/{id}`  | X-API-Key | Phase 3                         |
 | `GET /bookings`          | X-API-Key | Phase 4                         |
 
-The `X-API-Key` check arrives in Phase 2. Until then, these endpoints are not protected.
+Every route except `/health` requires the `X-API-Key` header. A missing or wrong key returns 401.
 
 `/health` is not part of the API contract. It is public on purpose: Render's health
 check and keep-alive pingers can't send custom headers, and it reveals nothing except "ok".
@@ -109,4 +109,10 @@ the rate-limit check and don't count as attempts._
 
 ## Tests
 
-_To be written in Phase 2._
+```sh
+npm test
+```
+
+Tests live in `src/app.test.ts` and use Node's built-in test runner. They replace the database
+pool's methods with fakes and never read `.env`, so they can't touch a real database. They need
+no setup, but they also can't prove the SQL itself works: check that against the deployed URL.

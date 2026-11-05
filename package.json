@@ -12,6 +12,7 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test src/app.test.ts",
     "migrate": "tsx --env-file=.env src/migrate.ts",
     "migrate:prod": "node dist/migrate.js"
   },
