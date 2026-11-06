@@ -1,0 +1,371 @@
+:root {
+  --bg: #f4f6f4;
+  --surface: #ffffff;
+  --text: #16211d;
+  --muted: #55645e;
+  --border: #d3dbd6;
+  --accent: #0f5e56;
+  --accent-hover: #0b4a44;
+  --accent-text: #ffffff;
+  --accent-soft: #e2f0ed;
+  --available: #0f5e56;
+  --unavailable: #5c6863;
+  --unavailable-soft: #e9ecea;
+  --error: #a32a22;
+  --error-soft: #fbeceb;
+  --header-bg: #123f3a;
+  --header-text: #ffffff;
+  --header-muted: #cde0dc;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #101614;
+    --surface: #18211e;
+    --text: #e8eeeb;
+    --muted: #a3b1ab;
+    --border: #33413c;
+    --accent: #5cc4b5;
+    --accent-hover: #7ad3c6;
+    --accent-text: #08201c;
+    --accent-soft: #1b3531;
+    --available: #7ad3c6;
+    --unavailable: #a3b1ab;
+    --unavailable-soft: #27312d;
+    --error: #ff9d95;
+    --error-soft: #3a1f1d;
+    --header-bg: #0c2b27;
+    --header-text: #e8eeeb;
+    --header-muted: #a9c4bf;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+h1,
+h2,
+p,
+dl,
+dd,
+ul {
+  margin: 0;
+  padding: 0;
+}
+
+h2 {
+  font-size: 1.25rem;
+  line-height: 1.3;
+}
+
+h2:focus {
+  outline: none;
+}
+
+.wrap {
+  width: 100%;
+  max-width: 62rem;
+  margin-inline: auto;
+  padding-inline: 1rem;
+}
+
+.site-header {
+  padding-block: 1.75rem;
+  background: var(--header-bg);
+  color: var(--header-text);
+}
+
+.site-header h1 {
+  font-size: 1.75rem;
+  line-height: 1.2;
+}
+
+.site-header p {
+  margin-top: 0.25rem;
+  color: var(--header-muted);
+}
+
+.layout {
+  display: grid;
+  gap: 1.5rem;
+  padding-block: 1.5rem 3rem;
+}
+
+@media (min-width: 48rem) {
+  .layout {
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    align-items: start;
+    gap: 2rem;
+  }
+
+  .panel {
+    position: sticky;
+    top: 1.5rem;
+  }
+}
+
+.section-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 0.9375rem;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+fieldset {
+  min-width: 0;
+  margin: 0.75rem 0 0;
+  padding: 0;
+  border: 0;
+}
+
+.field {
+  margin-bottom: 1rem;
+}
+
+.field label {
+  display: block;
+  margin-bottom: 0.25rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+}
+
+input[type='text'],
+input[type='email'],
+select {
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--muted);
+  border-radius: 0.375rem;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.slot-list {
+  display: grid;
+  gap: 0.5rem;
+  list-style: none;
+}
+
+.slot {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 3.5rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.slot:hover {
+  border-color: var(--accent);
+}
+
+.slot:has(input:checked) {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+  background: var(--accent-soft);
+}
+
+.slot input {
+  flex: none;
+  width: 1.125rem;
+  height: 1.125rem;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.slot-disabled {
+  background: transparent;
+  cursor: not-allowed;
+}
+
+.slot-disabled:hover {
+  border-color: var(--border);
+}
+
+.slot-disabled .slot-text {
+  color: var(--muted);
+}
+
+.slot-text {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+
+.slot-provider {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.slot-date,
+.slot-times {
+  font-size: 0.9375rem;
+}
+
+.badge {
+  flex: none;
+  padding: 0.125rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.badge-available {
+  background: var(--accent-soft);
+  color: var(--available);
+}
+
+.badge-booked,
+.badge-started {
+  background: var(--unavailable-soft);
+  color: var(--unavailable);
+}
+
+.panel {
+  padding: 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--surface);
+}
+
+.selected {
+  margin-block: 1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.selected-label {
+  color: var(--muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.notice {
+  margin-bottom: 1rem;
+  padding: 0.75rem;
+  border-left: 4px solid var(--error);
+  border-radius: 0.25rem;
+  overflow-wrap: anywhere;
+}
+
+.notice:focus {
+  outline: none;
+}
+
+.notice-error {
+  background: var(--error-soft);
+}
+
+.notice-title {
+  color: var(--error);
+  font-weight: 600;
+}
+
+.primary-button,
+.secondary-button {
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.5rem 1rem;
+  border-radius: 0.375rem;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.primary-button {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.primary-button:hover:not(:disabled) {
+  border-color: var(--accent-hover);
+  background: var(--accent-hover);
+}
+
+.primary-button:disabled {
+  border-color: var(--unavailable-soft);
+  background: var(--unavailable-soft);
+  color: var(--unavailable);
+  cursor: not-allowed;
+}
+
+.secondary-button {
+  border: 1px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+}
+
+.secondary-button:hover {
+  background: var(--accent-soft);
+}
+
+.link-button {
+  min-height: 2.75rem;
+  padding: 0 0.25rem;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.details {
+  display: grid;
+  gap: 0.75rem;
+  margin-block: 1rem 1.25rem;
+}
+
+.details dt {
+  color: var(--muted);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.booking-id {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 0.9375rem;
+  overflow-wrap: anywhere;
+}

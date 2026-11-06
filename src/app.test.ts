@@ -809,6 +809,140 @@ describe('GET /bookings', () => {
   }
 });
 
+describe('web page', () => {
+  for (const [url, contentType] of [
+    ['/', 'text/html'],
+    ['/app.js', 'text/javascript'],
+    ['/styles.css', 'text/css'],
+  ] as const) {
+    test(`${url} is served without a key, and never contains the key`, async () => {
+      const { app } = createTestApp();
+
+      const response = await app.inject({ method: 'GET', url });
+
+      assert.equal(response.statusCode, 200);
+      assert.match(String(response.headers['content-type']), new RegExp(contentType));
+      assert.ok(!response.body.includes(apiKey));
+      assert.ok(response.headers['content-security-policy']);
+    });
+  }
+
+  test('the API itself still needs the key', async () => {
+    const { app } = createTestApp();
+
+    for (const route of [
+      { method: 'GET', url: '/slots' },
+      { method: 'POST', url: '/reset' },
+      { method: 'POST', url: '/bookings' },
+      { method: 'DELETE', url: '/bookings/b1' },
+    ] as const) {
+      const response = await app.inject(route);
+      assert.equal(response.statusCode, 401, `${route.method} ${route.url}`);
+    }
+  });
+
+  for (const route of [
+    { method: 'POST', url: '/web/reset' },
+    { method: 'DELETE', url: '/web/bookings/b1' },
+    { method: 'DELETE', url: '/web/bookings' },
+  ] as const) {
+    test(`${route.method} ${route.url} does not exist`, async () => {
+      const { app, query, connect } = createTestApp();
+
+      const response = await app.inject(route);
+
+      assert.equal(response.statusCode, 401);
+      assert.equal(query.mock.callCount(), 0);
+      assert.equal(connect.mock.callCount(), 0);
+    });
+  }
+
+  test('GET /web/slots returns the slots without a key', async () => {
+    const { app } = createTestApp();
+
+    const response = await app.inject({ method: 'GET', url: '/web/slots' });
+
+    assert.equal(response.statusCode, 200);
+    assert.match(String(response.headers['content-type']), /application\/json/);
+    assert.deepEqual(response.json(), { slots: [] });
+  });
+
+  function webBooking(payload: object, headers: Record<string, string> = {}): InjectOptions {
+    return { method: 'POST', url: '/web/bookings', headers, payload };
+  }
+
+  test('POST /web/bookings creates a booking without a key', async () => {
+    const { app, countInserts } = createTestApp();
+
+    const response = await app.inject(webBooking(validBooking));
+
+    assert.equal(response.statusCode, 201);
+    assert.equal(response.json().status, 'confirmed');
+    assert.equal(countInserts(), 1);
+  });
+
+  test('POST /web/bookings forwards Idempotency-Key', async () => {
+    const { app, countInserts } = createTestApp();
+    const headers = { 'idempotency-key': 'k1' };
+
+    const first = await app.inject(webBooking(validBooking, headers));
+    const second = await app.inject(webBooking(validBooking, headers));
+
+    assert.equal(second.json().id, first.json().id);
+    assert.equal(countInserts(), 1);
+  });
+
+  test('POST /web/bookings passes on validation errors', async () => {
+    const { app } = createTestApp();
+
+    const response = await app.inject(webBooking({ ...validBooking, email: 'nope' }));
+
+    assert.equal(response.statusCode, 400);
+    assert.deepEqual(response.json(), { error: 'email is invalid' });
+  });
+
+  test('POST /web/bookings passes on 404', async () => {
+    const { app } = createTestApp([]);
+
+    const response = await app.inject(webBooking(validBooking));
+
+    assert.equal(response.statusCode, 404);
+    assert.deepEqual(response.json(), { error: 'slot not found' });
+  });
+
+  test('POST /web/bookings passes on 409', async () => {
+    const insertError = Object.assign(new Error('simulated'), { code: '23505', constraint: 'one_confirmed_per_slot' });
+    const { app } = createTestApp(undefined, { insertError });
+
+    const response = await app.inject(webBooking(validBooking));
+
+    assert.equal(response.statusCode, 409);
+    assert.deepEqual(response.json(), { error: 'slot already booked' });
+  });
+
+  test('POST /web/bookings passes on 429 with Retry-After', async () => {
+    const { app } = createTestApp();
+
+    for (let i = 0; i < 5; i++) {
+      await app.inject(webBooking(validBooking));
+    }
+    const response = await app.inject(webBooking(validBooking));
+
+    assert.equal(response.statusCode, 429);
+    assert.equal(response.headers['retry-after'], '37');
+    assert.deepEqual(response.json(), { error: 'too many attempts for this email' });
+  });
+
+  test('POST /web/bookings with no body is a 400, not a crash', async () => {
+    const { app } = createTestApp();
+
+    const response = await app.inject({ method: 'POST', url: '/web/bookings' });
+
+    assert.equal(response.statusCode, 400);
+    assert.deepEqual(response.json(), { error: 'slot_id must be a non-empty string' });
+  });
+});
+
 describe('DELETE /bookings/{id}', () => {
   const cancelledRow = {
     id: 'b1',

@@ -85,10 +85,30 @@ Render's free tier sleeps after about 15 minutes idle. A free external pinger
 | `DELETE /bookings/{id}`  | X-API-Key | done (Phase 3)                  |
 | `GET /bookings`          | X-API-Key | done (Phase 4)                  |
 
-Every route except `/health` requires the `X-API-Key` header. A missing or wrong key returns 401.
+Every API route requires the `X-API-Key` header. A missing or wrong key returns 401.
 
 `/health` is not part of the API contract. It is public on purpose: Render's health
 check and keep-alive pingers can't send custom headers, and it reveals nothing except "ok".
+
+## Web page
+
+The app serves the booking page at `/`, from the files in `public/`. It lists slots with a provider
+filter, books a slot and shows a confirmation with the booking id, provider and time.
+
+The page never holds the API key. It calls these public routes on the same server, which add
+`X-API-Key` and pass the request through the real API routes, so the same rules and errors apply:
+
+| Page route           | Calls            |
+| -------------------- | ---------------- |
+| `GET /web/slots`     | `GET /slots`     |
+| `POST /web/bookings` | `POST /bookings` |
+
+`/reset`, cancelling and looking up bookings have no public route, so they still require the key.
+Anyone can book through the page, as on any public booking page, and the per-email rate limit still
+applies. It can't stop someone using many different email addresses.
+
+The page sends a new `Idempotency-Key` with each new submission. It reuses the key only when the
+outcome is unknown (a network failure or a 5xx), so retrying can't create a second booking.
 
 Every error response is `{"error": "<message>"}`.
 

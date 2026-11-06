@@ -5,6 +5,10 @@ import { registerBookingRoutes } from './routes/bookings.js';
 import { registerHealthRoute } from './routes/health.js';
 import { registerResetRoute } from './routes/reset.js';
 import { registerSlotsRoute } from './routes/slots.js';
+import { registerWebRoutes, webRoutes } from './routes/web.js';
+
+// /health is public because Render's health check and keep-alive pingers can't send X-API-Key.
+const publicRoutes = new Set(['/health', ...webRoutes]);
 
 function sha256(value: string): Buffer {
   return createHash('sha256').update(value).digest();
@@ -21,8 +25,7 @@ export function buildApp(pool: pg.Pool, apiKey: string): FastifyInstance {
 
   // onRequest runs before the body is parsed, so a missing key beats a malformed body.
   app.addHook('onRequest', async (request, reply) => {
-    // Public on purpose: Render's health check and keep-alive pingers can't send X-API-Key.
-    if (request.routeOptions.url === '/health') return;
+    if (request.routeOptions.url && publicRoutes.has(request.routeOptions.url)) return;
 
     if (!isValidApiKey(request.headers['x-api-key'], apiKey)) {
       return reply.code(401).send({ error: 'missing or invalid API key' });
@@ -48,6 +51,7 @@ export function buildApp(pool: pg.Pool, apiKey: string): FastifyInstance {
   registerResetRoute(app, pool);
   registerSlotsRoute(app, pool);
   registerBookingRoutes(app, pool);
+  registerWebRoutes(app, apiKey);
 
   return app;
 }

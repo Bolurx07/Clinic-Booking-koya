@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Clinic Booking</title>
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="wrap">
+        <h1>Clinic Booking</h1>
+        <p>Choose an appointment time, then enter your details.</p>
+      </div>
+    </header>
+
+    <main class="wrap layout">
+      <section aria-labelledby="slots-heading">
+        <div class="section-heading">
+          <h2 id="slots-heading">Appointment times</h2>
+          <button type="button" id="refresh" class="link-button">Refresh</button>
+        </div>
+
+        <div class="field">
+          <label for="provider">Provider</label>
+          <select id="provider">
+            <option value="">All providers</option>
+          </select>
+        </div>
+
+        <p id="slots-status" class="muted" role="status">Loading appointment times…</p>
+        <div id="slots-error" class="notice notice-error" role="alert" hidden></div>
+
+        <fieldset id="slots-fieldset" hidden>
+          <legend class="visually-hidden">Choose an appointment time</legend>
+          <ul id="slots" class="slot-list"></ul>
+        </fieldset>
+      </section>
+
+      <section class="panel" aria-labelledby="booking-heading">
+        <form id="booking-form" novalidate>
+          <h2 id="booking-heading">Your details</h2>
+
+          <div class="selected">
+            <span class="selected-label">Selected time</span>
+            <p id="selected-slot">None yet. Choose a time from the list.</p>
+          </div>
+
+          <div class="field">
+            <label for="name">Name</label>
+            <input id="name" name="name" type="text" autocomplete="name" />
+          </div>
+
+          <div class="field">
+            <label for="email">Email</label>
+            <input id="email" name="email" type="email" autocomplete="email" inputmode="email" />
+          </div>
+
+          <div id="booking-error" class="notice notice-error" role="alert" tabindex="-1" hidden>
+            <p id="booking-error-title" class="notice-title"></p>
+            <p id="booking-error-detail"></p>
+          </div>
+
+          <button id="submit" type="submit" class="primary-button" disabled>Book appointment</button>
+        </form>
+
+        <div id="confirmation" hidden>
+          <h2 id="confirmation-heading" tabindex="-1">Booking confirmed</h2>
+          <dl class="details">
+            <div>
+              <dt>Booking ID</dt>
+              <dd id="confirmed-id" class="booking-id"></dd>
+            </div>
+            <div>
+              <dt>Provider</dt>
+              <dd id="confirmed-provider"></dd>
+            </div>
+            <div>
+              <dt>Time</dt>
+              <dd id="confirmed-time"></dd>
+            </div>
+          </dl>
+          <button id="book-another" type="button" class="secondary-button">Book another appointment</button>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
