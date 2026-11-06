@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type pg from 'pg';
+import { withTransaction } from '../db.js';
 
 interface ResetBody {
   slots: {
@@ -32,16 +33,9 @@ const resetBodySchema = {
 
 export function registerResetRoute(app: FastifyInstance, pool: pg.Pool): void {
   app.post<{ Body: ResetBody }>('/reset', { schema: { body: resetBodySchema } }, async (request) => {
-    const client = await pool.connect();
-    // The pool stops listening while a client is checked out, so a connection dropping
-    // between queries would otherwise crash the process. The next query still fails and rolls back.
-    const onClientError = (err: Error): void => {
-      request.log.error({ err }, 'reset: database connection error');
-    };
-    client.on('error', onClientError);
-
-    try {
-      await client.query('BEGIN');
+    await withTransaction(pool, request.log, async (client) => {
+      // Stored keys would otherwise replay bookings that no longer exist, or return stale 422s.
+      await client.query('DELETE FROM idempotency_keys');
       // Bookings first: their foreign key to slots has no cascade.
       await client.query('DELETE FROM bookings');
       await client.query('DELETE FROM slots');
@@ -53,15 +47,7 @@ export function registerResetRoute(app: FastifyInstance, pool: pg.Pool): void {
           slot.end,
         ]);
       }
-      await client.query('COMMIT');
-    } catch (err) {
-      await client.query('ROLLBACK');
-      throw err;
-    } finally {
-      // Clients are reused, so leave no listener behind.
-      client.removeListener('error', onClientError);
-      client.release();
-    }
+    });
 
     return { status: 'ok' };
   });

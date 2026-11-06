@@ -55,7 +55,7 @@ Migrations are plain SQL files in `migrations/`, applied in name order by `src/m
 Applied files are recorded in the `schema_migrations` table, so running it again is safe.
 Each file runs in its own transaction.
 
-To change the schema, add a new file with the next number (e.g. `002_add_something.sql`).
+To change the schema, add a new file with the next number (e.g. `004_add_something.sql`).
 Never edit a migration that has already been applied.
 
 ## Deploying to Render
@@ -80,10 +80,10 @@ Render's free tier sleeps after about 15 minutes idle. A free external pinger
 | `GET /health`            | public    | done (Phase 0)                  |
 | `POST /reset`            | X-API-Key | done (Phase 1)                  |
 | `GET /slots`             | X-API-Key | done (Phase 1)                  |
-| `POST /bookings`         | X-API-Key | Phases 1-3 done; 4 to 5 next    |
+| `POST /bookings`         | X-API-Key | Phases 1-4 done; 5 next         |
 | `GET /bookings/{id}`     | X-API-Key | done (Phase 1)                  |
 | `DELETE /bookings/{id}`  | X-API-Key | done (Phase 3)                  |
-| `GET /bookings`          | X-API-Key | Phase 4                         |
+| `GET /bookings`          | X-API-Key | done (Phase 4)                  |
 
 Every route except `/health` requires the `X-API-Key` header. A missing or wrong key returns 401.
 
@@ -112,7 +112,39 @@ rebooking it creates a new booking with a new id. The cancelled booking stays re
 
 ### Idempotency
 
-_To be written in Phase 4._
+`POST /bookings` accepts an optional `Idempotency-Key` header. An empty header counts as no key.
+
+The key is inserted into `idempotency_keys` in the same transaction as the booking. If another
+request holds the same key, Postgres makes this one wait until that transaction finishes, so two
+simultaneous requests can't both create a booking. The waiting request then reads the stored result:
+
+- Same body: it replays the stored status and body, including the booking `id`.
+- Different body: it returns 422.
+
+Bodies are compared by the SHA-256 of their canonical JSON (object keys sorted at every depth), so
+key order doesn't matter. The comparison uses the body as sent, before trimming, so `"Ada"` and
+`" Ada "` count as different bodies.
+
+Every 201 and 4xx from the booking rules is stored, so a 409 or a 400 replays as well, even if the
+slot has since been freed. These are not stored:
+
+- 401, because it is answered before the route runs.
+- 500, because the transaction rolls back and removes the key, so the client can retry.
+- Malformed JSON, because there is no parsed body to hash.
+
+A unique violation aborts a Postgres transaction, so the booking attempt runs inside a savepoint.
+Rolling back to it keeps the claimed key, so the 409 can still be stored.
+
+`POST /reset` clears the stored keys, so repeated runs don't get stale replays or 422s.
+
+### Pagination
+
+`GET /bookings` orders by `(created_at, id)`, so bookings with the same timestamp still have a stable
+order. It uses keyset pagination, so a booking created between pages can't shift the results.
+
+`next_cursor` is the base64url of the last row's `(created_at, id)`. The timestamp in it comes from
+Postgres as text with microseconds. A JS `Date` only holds milliseconds, so a cursor built from one
+would sort before its own row and return that row again. A cursor this API didn't issue returns 400.
 
 ### Rate limiting
 

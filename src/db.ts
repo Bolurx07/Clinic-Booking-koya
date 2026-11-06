@@ -1,4 +1,42 @@
+import type { FastifyBaseLogger } from 'fastify';
 import pg from 'pg';
+
+// Lets a route run the same statements on the pool or inside a transaction.
+export interface Queryable {
+  query<Row extends pg.QueryResultRow>(text: string, values?: unknown[]): Promise<pg.QueryResult<Row>>;
+}
+
+// Commits if work resolves and rolls back if it throws.
+export async function withTransaction<T>(
+  pool: pg.Pool,
+  log: FastifyBaseLogger,
+  work: (client: pg.PoolClient) => Promise<T>,
+): Promise<T> {
+  const client = await pool.connect();
+  // The pool stops listening while a client is checked out, so a connection dropping
+  // between queries would otherwise crash the process. The next query still fails and rolls back.
+  const onClientError = (err: Error): void => {
+    log.error({ err }, 'database connection error during a transaction');
+  };
+  client.on('error', onClientError);
+
+  try {
+    await client.query('BEGIN');
+    const result = await work(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    // If the connection is gone this fails too. The original error is the one worth reporting.
+    await client.query('ROLLBACK').catch((rollbackErr: unknown) => {
+      log.error({ err: rollbackErr }, 'rollback failed');
+    });
+    throw err;
+  } finally {
+    // Clients are reused, so leave no listener behind.
+    client.removeListener('error', onClientError);
+    client.release();
+  }
+}
 
 export function createPool(databaseUrl: string): pg.Pool {
   const pool = new pg.Pool({ connectionString: databaseUrl });
