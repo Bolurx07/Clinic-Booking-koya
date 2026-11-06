@@ -31,25 +31,39 @@ const resetBodySchema = {
   },
 };
 
+function isDuplicateSlotId(err: unknown): boolean {
+  return (
+    err instanceof Error && 'code' in err && err.code === '23505' && 'constraint' in err && err.constraint === 'slots_pkey'
+  );
+}
+
 export function registerResetRoute(app: FastifyInstance, pool: pg.Pool): void {
-  app.post<{ Body: ResetBody }>('/reset', { schema: { body: resetBodySchema } }, async (request) => {
-    await withTransaction(pool, request.log, async (client) => {
-      // Stored keys would otherwise replay bookings that no longer exist, or return stale 422s.
-      await client.query('DELETE FROM idempotency_keys');
-      // Attempts would otherwise carry over and return stale 429s.
-      await client.query('DELETE FROM attempts');
-      // Bookings first: their foreign key to slots has no cascade.
-      await client.query('DELETE FROM bookings');
-      await client.query('DELETE FROM slots');
-      for (const slot of request.body.slots) {
-        await client.query('INSERT INTO slots (id, provider, start, "end") VALUES ($1, $2, $3, $4)', [
-          slot.id,
-          slot.provider,
-          slot.start,
-          slot.end,
-        ]);
+  app.post<{ Body: ResetBody }>('/reset', { schema: { body: resetBodySchema } }, async (request, reply) => {
+    try {
+      await withTransaction(pool, request.log, async (client) => {
+        // Stored keys would otherwise replay bookings that no longer exist, or return stale 422s.
+        await client.query('DELETE FROM idempotency_keys');
+        // Attempts would otherwise carry over and return stale 429s.
+        await client.query('DELETE FROM attempts');
+        // Bookings first: their foreign key to slots has no cascade.
+        await client.query('DELETE FROM bookings');
+        await client.query('DELETE FROM slots');
+        for (const slot of request.body.slots) {
+          await client.query('INSERT INTO slots (id, provider, start, "end") VALUES ($1, $2, $3, $4)', [
+            slot.id,
+            slot.provider,
+            slot.start,
+            slot.end,
+          ]);
+        }
+      });
+    } catch (err) {
+      // The transaction has rolled back, so the existing slots and bookings are untouched.
+      if (isDuplicateSlotId(err)) {
+        return reply.code(400).send({ error: 'slot ids must be unique' });
       }
-    });
+      throw err;
+    }
 
     return { status: 'ok' };
   });

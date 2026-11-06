@@ -18,6 +18,7 @@ interface FakeBookingResults {
   existingRows?: object[];
   listRows?: object[];
   retryAfter?: number;
+  slotInsertError?: Error;
 }
 
 interface StoredKey {
@@ -28,7 +29,14 @@ interface StoredKey {
 
 function createTestApp(
   slotRows: { hasStarted: boolean }[] = [{ hasStarted: false }],
-  { insertError, cancelledRows = [], existingRows = [], listRows = [], retryAfter = 37 }: FakeBookingResults = {},
+  {
+    insertError,
+    cancelledRows = [],
+    existingRows = [],
+    listRows = [],
+    retryAfter = 37,
+    slotInsertError,
+  }: FakeBookingResults = {},
 ) {
   const pool = new pg.Pool({ connectionString: unreachableDatabaseUrl });
   const storedKeys = new Map<string, StoredKey>();
@@ -69,7 +77,11 @@ function createTestApp(
           attempts.splice(attempts.length - attemptsRecorded, attemptsRecorded);
           return { rows: [] };
         }
-        if (sql.includes('pg_advisory_xact_lock') || sql.includes('DELETE FROM attempts')) {
+        if (sql.includes('pg_advisory_xact_lock') || sql.startsWith('DELETE FROM')) {
+          return { rows: [] };
+        }
+        if (sql.includes('INSERT INTO slots')) {
+          if (slotInsertError) throw slotInsertError;
           return { rows: [] };
         }
         if (sql.includes('FROM attempts')) {
@@ -807,6 +819,77 @@ describe('GET /bookings', () => {
       assert.equal(query.mock.callCount(), 0);
     });
   }
+});
+
+describe('POST /reset', () => {
+  const slot = { id: 's1', provider: 'Dr Ade', start: '2030-01-01T09:00:00Z', end: '2030-01-01T09:30:00Z' };
+
+  function reset(payload: object): InjectOptions {
+    return { method: 'POST', url: '/reset', headers: validHeaders, payload };
+  }
+
+  test('200 for valid slots', async () => {
+    const { app } = createTestApp();
+
+    const response = await app.inject(reset({ slots: [slot] }));
+
+    assert.equal(response.statusCode, 200);
+  });
+
+  test('a duplicate slot id is 400', async () => {
+    const slotInsertError = Object.assign(new Error('simulated'), { code: '23505', constraint: 'slots_pkey' });
+    const { app } = createTestApp(undefined, { slotInsertError });
+
+    const response = await app.inject(reset({ slots: [slot, slot] }));
+
+    assert.equal(response.statusCode, 400);
+    assert.deepEqual(response.json(), { error: 'slot ids must be unique' });
+  });
+
+  test('another unique violation stays a 500', async () => {
+    const slotInsertError = Object.assign(new Error('simulated'), { code: '23505', constraint: 'other' });
+    const { app } = createTestApp(undefined, { slotInsertError });
+
+    const response = await app.inject(reset({ slots: [slot] }));
+
+    assert.equal(response.statusCode, 500);
+  });
+
+  for (const [label, payload] of [
+    ['no slots field', {}],
+    ['a slot with no id', { slots: [{ ...slot, id: undefined }] }],
+    ['a start that is not a date', { slots: [{ ...slot, start: 'soon' }] }],
+  ] as const) {
+    test(`${label} is 400 in the error format`, async () => {
+      const { app } = createTestApp();
+
+      const response = await app.inject(reset(payload));
+
+      assert.equal(response.statusCode, 400);
+      assert.equal(typeof response.json().error, 'string');
+    });
+  }
+});
+
+describe('values Postgres rejects', () => {
+  test('a Postgres data error (class 22) is 400, not 500', async () => {
+    const insertError = Object.assign(new Error('simulated'), { code: '22021' });
+    const { app } = createTestApp(undefined, { insertError });
+
+    const response = await app.inject(postBooking({ ...validBooking, name: 'a\u0000b' }));
+
+    assert.equal(response.statusCode, 400);
+    assert.deepEqual(response.json(), { error: 'request contains an invalid value' });
+  });
+
+  test('a badly encoded URL is 400 in the error format', async () => {
+    const { app } = createTestApp();
+
+    const response = await app.inject({ method: 'GET', url: '/bookings/%E0%A4%A', headers: validHeaders });
+
+    assert.equal(response.statusCode, 400);
+    assert.equal(typeof response.json().error, 'string');
+  });
 });
 
 describe('web page', () => {

@@ -20,6 +20,12 @@ function isValidApiKey(candidate: unknown, apiKey: string): boolean {
   return timingSafeEqual(sha256(candidate), sha256(apiKey));
 }
 
+// Postgres error class 22 means it rejected a value, such as a null character in text.
+// That is a problem with the request, not with the server.
+function isInvalidValueError(err: FastifyError): boolean {
+  return typeof err.code === 'string' && err.code.startsWith('22');
+}
+
 export function buildApp(pool: pg.Pool, apiKey: string): FastifyInstance {
   const app = Fastify({ logger: true });
 
@@ -38,6 +44,12 @@ export function buildApp(pool: pg.Pool, apiKey: string): FastifyInstance {
   });
 
   app.setErrorHandler<FastifyError>((err, request, reply) => {
+    if (isInvalidValueError(err)) {
+      request.log.warn({ err }, 'database rejected a value from the request');
+      reply.code(400).send({ error: 'request contains an invalid value' });
+      return;
+    }
+
     const statusCode = err.statusCode ?? 500;
     if (statusCode >= 500) {
       request.log.error({ err }, 'unhandled error');
