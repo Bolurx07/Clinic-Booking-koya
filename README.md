@@ -55,7 +55,7 @@ Migrations are plain SQL files in `migrations/`, applied in name order by `src/m
 Applied files are recorded in the `schema_migrations` table, so running it again is safe.
 Each file runs in its own transaction.
 
-To change the schema, add a new file with the next number (e.g. `004_add_something.sql`).
+To change the schema, add a new file with the next number (e.g. `005_add_something.sql`).
 Never edit a migration that has already been applied.
 
 ## Deploying to Render
@@ -80,7 +80,7 @@ Render's free tier sleeps after about 15 minutes idle. A free external pinger
 | `GET /health`            | public    | done (Phase 0)                  |
 | `POST /reset`            | X-API-Key | done (Phase 1)                  |
 | `GET /slots`             | X-API-Key | done (Phase 1)                  |
-| `POST /bookings`         | X-API-Key | Phases 1-4 done; 5 next         |
+| `POST /bookings`         | X-API-Key | done (Phases 1-5)               |
 | `GET /bookings/{id}`     | X-API-Key | done (Phase 1)                  |
 | `DELETE /bookings/{id}`  | X-API-Key | done (Phase 3)                  |
 | `GET /bookings`          | X-API-Key | done (Phase 4)                  |
@@ -129,7 +129,7 @@ Every 201 and 4xx from the booking rules is stored, so a 409 or a 400 replays as
 slot has since been freed. These are not stored:
 
 - 401, because it is answered before the route runs.
-- 500, because the transaction rolls back and removes the key, so the client can retry.
+- 429 and 500, because the transaction rolls back and removes the key, so the client can retry.
 - Malformed JSON, because there is no parsed body to hash.
 
 A unique violation aborts a Postgres transaction, so the booking attempt runs inside a savepoint.
@@ -148,8 +148,32 @@ would sort before its own row and return that row again. A cursor this API didn'
 
 ### Rate limiting
 
-_To be written in Phase 5. Decision already made: idempotent replays are answered before
-the rate-limit check and don't count as attempts._
+`POST /bookings` allows 5 attempts per normalized email in a sliding 60-second window. The 6th gets
+429 with `Retry-After`: the seconds until the oldest attempt in the window expires, rounded up and at
+least 1. Attempts are stored in the `attempts` table, so the limit holds across restarts and instances.
+
+**Decision: idempotent replays are answered before the rate-limit check and don't count as attempts.**
+A client retrying after a lost response shouldn't use up its allowance. The same goes for a reused
+key with a different body: its 422 is also answered first and doesn't count.
+
+What counts:
+
+- Every attempt that reaches the booking rules, including ones that fail with 400, 404 or 409.
+  Each attempt is recorded before a savepoint, so a failed booking doesn't undo it.
+- A badly formed email, which counts against itself, because the limit runs before validation.
+
+What doesn't count:
+
+- A blocked attempt. Otherwise a client that keeps retrying would never get through, and
+  `Retry-After` would be wrong.
+- A missing or non-string email, which has nothing to count against and returns 400.
+- Malformed JSON, which is rejected before the route runs.
+- A 500, because its transaction rolls back. It's a server failure rather than a client attempt.
+
+A per-email Postgres advisory lock, held until the transaction ends, makes the count and insert
+atomic. Without it, simultaneous requests could all count 4 and all pass. Other emails don't wait.
+
+`POST /reset` clears the attempts, so repeated runs don't get stale 429s.
 
 ## Tests
 

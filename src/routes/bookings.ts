@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type pg from 'pg';
-import { type Queryable, toUtcIso } from '../db.js';
+import { toUtcIso, withTransaction } from '../db.js';
 import { hashRequestBody, runOnce, type StoredResponse } from '../idempotency.js';
+import { RateLimitedError, recordAttempt } from '../rateLimit.js';
 
 interface NewBooking {
   slotId: string;
@@ -61,6 +62,17 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim() !== '';
 }
 
+function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+// The rate limit runs before validation, so a badly formed email still counts as an attempt
+// against itself. A missing or non-string email has nothing to count against, and gets a 400.
+function emailToRateLimit(body: unknown): string | null {
+  const email = typeof body === 'object' && body !== null && 'email' in body ? body.email : undefined;
+  return isNonEmptyString(email) ? normalizeEmail(email) : null;
+}
+
 // Reports the first invalid field. Any body that isn't an object counts as all fields missing.
 function parseNewBooking(body: unknown): NewBooking | { error: string } {
   const fields: Record<string, unknown> = typeof body === 'object' && body !== null ? { ...body } : {};
@@ -70,7 +82,7 @@ function parseNewBooking(body: unknown): NewBooking | { error: string } {
   if (!isNonEmptyString(name)) return { error: 'name must be a non-empty string' };
   if (!isNonEmptyString(email)) return { error: 'email must be a non-empty string' };
 
-  const normalizedEmail = email.trim().toLowerCase();
+  const normalizedEmail = normalizeEmail(email);
   if (!emailPattern.test(normalizedEmail)) return { error: 'email is invalid' };
 
   return { slotId, name: name.trim(), email: normalizedEmail };
@@ -88,7 +100,7 @@ function isConfirmedSlotConflict(err: unknown): boolean {
 }
 
 // Returns the response rather than sending it, so an idempotent request can store it first.
-async function createBooking(db: Queryable, body: unknown): Promise<StoredResponse> {
+async function createBooking(client: pg.PoolClient, body: unknown): Promise<StoredResponse> {
   const newBooking = parseNewBooking(body);
   if ('error' in newBooking) {
     return { statusCode: 400, body: { error: newBooking.error } };
@@ -96,7 +108,7 @@ async function createBooking(db: Queryable, body: unknown): Promise<StoredRespon
   const { slotId, name, email } = newBooking;
 
   // now() is the database clock, so the app server's clock doesn't matter.
-  const slotResult = await db.query<{ hasStarted: boolean }>(
+  const slotResult = await client.query<{ hasStarted: boolean }>(
     'SELECT start <= now() AS "hasStarted" FROM slots WHERE id = $1',
     [slotId],
   );
@@ -111,7 +123,7 @@ async function createBooking(db: Queryable, body: unknown): Promise<StoredRespon
   // No check for an existing booking first: the unique index is what stops double booking,
   // including when many requests arrive at the same moment.
   try {
-    const result = await db.query<BookingRow>(
+    const result = await client.query<BookingRow>(
       `INSERT INTO bookings (id, slot_id, name, email, status)
        VALUES ($1, $2, $3, $4, 'confirmed')
        RETURNING id, slot_id, name, email, status, created_at`,
@@ -124,6 +136,23 @@ async function createBooking(db: Queryable, body: unknown): Promise<StoredRespon
     }
     throw err;
   }
+}
+
+// Everything after an idempotent replay: the rate limit, then the booking rules.
+async function attemptBooking(client: pg.PoolClient, body: unknown): Promise<StoredResponse> {
+  const email = emailToRateLimit(body);
+  if (email) {
+    await recordAttempt(client, email);
+  }
+
+  // A unique violation aborts the whole transaction, but the attempt must still count and an
+  // idempotent 409 must still be stored. Rolling back to here recovers the transaction and keeps both.
+  await client.query('SAVEPOINT attempt');
+  const response = await createBooking(client, body);
+  if (response.statusCode >= 400) {
+    await client.query('ROLLBACK TO SAVEPOINT attempt');
+  }
+  return response;
 }
 
 function encodeCursor(cursor: BookingCursor): string {
@@ -174,21 +203,26 @@ function parseListQuery(query: BookingListQuery): ListParams | { error: string }
   }
 
   // Stored emails are always trimmed and lower-case, so normalizing here makes the match ignore case.
-  return { email: email.trim().toLowerCase(), limit, cursor };
+  return { email: normalizeEmail(email), limit, cursor };
 }
 
 export function registerBookingRoutes(app: FastifyInstance, pool: pg.Pool): void {
   app.post('/bookings', async (request, reply) => {
     const key = request.headers['idempotency-key'];
 
-    const response =
-      typeof key === 'string' && key !== ''
-        ? await runOnce(pool, request.log, key, hashRequestBody(request.body), (client) =>
-            createBooking(client, request.body),
-          )
-        : await createBooking(pool, request.body);
-
-    return reply.code(response.statusCode).send(response.body);
+    try {
+      const response = await withTransaction(pool, request.log, (client) =>
+        typeof key === 'string' && key !== ''
+          ? runOnce(client, key, hashRequestBody(request.body), () => attemptBooking(client, request.body))
+          : attemptBooking(client, request.body),
+      );
+      return reply.code(response.statusCode).send(response.body);
+    } catch (err) {
+      if (err instanceof RateLimitedError) {
+        return reply.code(429).header('Retry-After', String(err.retryAfterSeconds)).send({ error: err.message });
+      }
+      throw err;
+    }
   });
 
   app.get<{ Querystring: BookingListQuery }>('/bookings', async (request, reply) => {

@@ -1,11 +1,6 @@
 import type { FastifyBaseLogger } from 'fastify';
 import pg from 'pg';
 
-// Lets a route run the same statements on the pool or inside a transaction.
-export interface Queryable {
-  query<Row extends pg.QueryResultRow>(text: string, values?: unknown[]): Promise<pg.QueryResult<Row>>;
-}
-
 // Commits if work resolves and rolls back if it throws.
 export async function withTransaction<T>(
   pool: pg.Pool,

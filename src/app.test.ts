@@ -17,6 +17,7 @@ interface FakeBookingResults {
   cancelledRows?: object[];
   existingRows?: object[];
   listRows?: object[];
+  retryAfter?: number;
 }
 
 interface StoredKey {
@@ -27,10 +28,11 @@ interface StoredKey {
 
 function createTestApp(
   slotRows: { hasStarted: boolean }[] = [{ hasStarted: false }],
-  { insertError, cancelledRows = [], existingRows = [], listRows = [] }: FakeBookingResults = {},
+  { insertError, cancelledRows = [], existingRows = [], listRows = [], retryAfter = 37 }: FakeBookingResults = {},
 ) {
   const pool = new pg.Pool({ connectionString: unreachableDatabaseUrl });
   const storedKeys = new Map<string, StoredKey>();
+  const attempts: string[] = [];
 
   const query = mock.method(pool, 'query', async (sql: string, params: unknown[] = []) => {
     if (sql.includes('cursor_created_at')) return { rows: listRows };
@@ -49,10 +51,11 @@ function createTestApp(
     throw new Error(`unexpected query: ${sql}`);
   });
 
-  // A client that handles the key table and passes everything else to the fake query above.
-  // ROLLBACK forgets a key claimed in that transaction, like the real one.
+  // A client that handles the key and attempt tables and passes everything else to the fake query
+  // above. ROLLBACK forgets what that transaction wrote to them, like the real one.
   const connect = mock.method(pool, 'connect', async () => {
     let claimed: string | undefined;
+    let attemptsRecorded = 0;
     return {
       on: () => {},
       removeListener: () => {},
@@ -63,6 +66,19 @@ function createTestApp(
         }
         if (sql === 'ROLLBACK') {
           if (claimed) storedKeys.delete(claimed);
+          attempts.splice(attempts.length - attemptsRecorded, attemptsRecorded);
+          return { rows: [] };
+        }
+        if (sql.includes('pg_advisory_xact_lock') || sql.includes('DELETE FROM attempts')) {
+          return { rows: [] };
+        }
+        if (sql.includes('FROM attempts')) {
+          const count = attempts.filter((email) => email === params[0]).length;
+          return { rows: [{ attempts: count, retry_after: retryAfter }] };
+        }
+        if (sql.includes('INSERT INTO attempts')) {
+          attempts.push(params[0] as string);
+          attemptsRecorded++;
           return { rows: [] };
         }
         if (sql.includes('INSERT INTO idempotency_keys')) {
@@ -95,7 +111,7 @@ function createTestApp(
   const countInserts = (): number =>
     query.mock.calls.filter((call) => String(call.arguments[0]).includes('INSERT INTO bookings')).length;
 
-  return { app, query, connect, countInserts };
+  return { app, query, connect, countInserts, attempts };
 }
 
 function postBooking(payload: object): InjectOptions {
@@ -481,17 +497,180 @@ describe('POST /bookings: Idempotency-Key', () => {
     ['no key', validHeaders],
     ['an empty key', { ...validHeaders, 'idempotency-key': '' }],
   ] as const) {
-    test(`${label} needs no transaction and is not idempotent`, async () => {
-      const { app, connect, countInserts } = createTestApp();
+    test(`${label} is not idempotent`, async () => {
+      const { app, countInserts } = createTestApp();
       const request = { ...postBooking(validBooking), headers };
 
       await app.inject(request);
       await app.inject(request);
 
-      assert.equal(connect.mock.callCount(), 0);
       assert.equal(countInserts(), 2);
     });
   }
+});
+
+describe('429: POST /bookings rate limit', () => {
+  async function useUpAttempts(app: ReturnType<typeof createTestApp>['app'], payload: object = validBooking) {
+    for (let i = 0; i < 5; i++) {
+      await app.inject(postBooking(payload));
+    }
+  }
+
+  test('the 6th attempt is 429 with Retry-After, creating nothing', async () => {
+    const { app, countInserts } = createTestApp();
+
+    await useUpAttempts(app);
+    const sixth = await app.inject(postBooking(validBooking));
+
+    assert.equal(sixth.statusCode, 429);
+    assert.equal(sixth.headers['retry-after'], '37');
+    assert.deepEqual(sixth.json(), { error: 'too many attempts for this email' });
+    assert.equal(countInserts(), 5);
+  });
+
+  test('Retry-After is at least 1', async () => {
+    const { app } = createTestApp(undefined, { retryAfter: 0 });
+
+    await useUpAttempts(app);
+    const sixth = await app.inject(postBooking(validBooking));
+
+    assert.equal(sixth.headers['retry-after'], '1');
+  });
+
+  test('a blocked attempt is not counted', async () => {
+    const { app, attempts } = createTestApp();
+
+    await useUpAttempts(app);
+    await app.inject(postBooking(validBooking));
+
+    assert.equal(attempts.length, 5);
+  });
+
+  test('another email is not affected', async () => {
+    const { app } = createTestApp();
+
+    await useUpAttempts(app);
+    const other = await app.inject(postBooking({ ...validBooking, email: 'other@example.com' }));
+
+    assert.equal(other.statusCode, 201);
+  });
+
+  test('emails are counted after normalizing', async () => {
+    const { app, attempts } = createTestApp();
+
+    await app.inject(postBooking({ ...validBooking, email: '  ADA@Example.COM ' }));
+    await app.inject(postBooking(validBooking));
+
+    assert.deepEqual(attempts, ['ada@example.com', 'ada@example.com']);
+  });
+
+  for (const [label, payload] of [
+    ['a missing name', { ...validBooking, name: '' }],
+    ['a badly formed email', { ...validBooking, email: 'not-an-email' }],
+  ] as const) {
+    test(`failed attempts count: ${label}`, async () => {
+      const { app } = createTestApp();
+
+      await useUpAttempts(app, payload);
+      const sixth = await app.inject(postBooking(payload));
+
+      assert.equal(sixth.statusCode, 429);
+    });
+  }
+
+  test('failed attempts count: unknown slot', async () => {
+    const { app } = createTestApp([]);
+
+    await useUpAttempts(app);
+    const sixth = await app.inject(postBooking(validBooking));
+
+    assert.equal(sixth.statusCode, 429);
+  });
+
+  test('failed attempts count: slot conflict', async () => {
+    const insertError = Object.assign(new Error('simulated'), { code: '23505', constraint: 'one_confirmed_per_slot' });
+    const { app, attempts } = createTestApp(undefined, { insertError });
+
+    await useUpAttempts(app);
+    const sixth = await app.inject(postBooking(validBooking));
+
+    assert.equal(attempts.length, 5);
+    assert.equal(sixth.statusCode, 429);
+  });
+
+  for (const [label, payload] of [
+    ['missing', { slot_id: 's1', name: 'Ada Obi' }],
+    ['a number', { ...validBooking, email: 123 }],
+  ] as const) {
+    test(`an email that is ${label} has nothing to count against, so it stays 400`, async () => {
+      const { app, attempts } = createTestApp();
+
+      await useUpAttempts(app, payload);
+      const sixth = await app.inject(postBooking(payload));
+
+      assert.equal(sixth.statusCode, 400);
+      assert.equal(attempts.length, 0);
+    });
+  }
+
+  describe('with Idempotency-Key', () => {
+    function keyedBooking(payload: object, key: string): InjectOptions {
+      return { ...postBooking(payload), headers: { ...validHeaders, 'idempotency-key': key } };
+    }
+
+    test('a replay does not count, and works at the limit', async () => {
+      const { app, attempts } = createTestApp();
+
+      const first = await app.inject(keyedBooking(validBooking, 'k1'));
+      await app.inject(keyedBooking(validBooking, 'k1'));
+      assert.equal(attempts.length, 1);
+
+      for (let i = 0; i < 4; i++) {
+        await app.inject(postBooking(validBooking));
+      }
+      const replay = await app.inject(keyedBooking(validBooking, 'k1'));
+
+      assert.equal(replay.statusCode, 201);
+      assert.equal(replay.json().id, first.json().id);
+      assert.equal(attempts.length, 5);
+    });
+
+    test('a reused key with a different body is 422 at the limit, not 429', async () => {
+      const { app } = createTestApp();
+
+      await app.inject(keyedBooking(validBooking, 'k1'));
+      for (let i = 0; i < 4; i++) {
+        await app.inject(postBooking(validBooking));
+      }
+      const response = await app.inject(keyedBooking({ ...validBooking, name: 'Someone Else' }, 'k1'));
+
+      assert.equal(response.statusCode, 422);
+    });
+
+    test('a 429 is not stored: the key is released', async () => {
+      const { app, attempts } = createTestApp();
+
+      await useUpAttempts(app);
+      const blocked = await app.inject(keyedBooking(validBooking, 'k1'));
+      assert.equal(blocked.statusCode, 429);
+
+      // Simulates the window passing. If the 429 had been stored, this would replay it.
+      attempts.length = 0;
+      const retry = await app.inject(keyedBooking(validBooking, 'k1'));
+
+      assert.equal(retry.statusCode, 201);
+    });
+
+    test('a stored 400 stays counted once', async () => {
+      const { app, attempts } = createTestApp();
+      const invalid = { ...validBooking, name: '' };
+
+      await app.inject(keyedBooking(invalid, 'k1'));
+      await app.inject(keyedBooking(invalid, 'k1'));
+
+      assert.equal(attempts.length, 1);
+    });
+  });
 });
 
 describe('GET /bookings', () => {

@@ -36,6 +36,8 @@ export function registerResetRoute(app: FastifyInstance, pool: pg.Pool): void {
     await withTransaction(pool, request.log, async (client) => {
       // Stored keys would otherwise replay bookings that no longer exist, or return stale 422s.
       await client.query('DELETE FROM idempotency_keys');
+      // Attempts would otherwise carry over and return stale 429s.
+      await client.query('DELETE FROM attempts');
       // Bookings first: their foreign key to slots has no cascade.
       await client.query('DELETE FROM bookings');
       await client.query('DELETE FROM slots');
